@@ -172,3 +172,7 @@ cython_debug/
 
 # Unsloth cache files
 unsloth_compiled_cache/
+
+# outputs and compilation
+outputs/
+torch_compile_debug/
