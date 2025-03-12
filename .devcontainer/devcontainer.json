@@ -19,7 +19,8 @@
 		"vscode": {
 			"extensions": [
 				"ms-toolsai.jupyter",
-				"ms-python.black-formatter"
+				"ms-python.black-formatter",
+				"nvidia.nsight-vscode-edition"
 			]
 		}
 	},
