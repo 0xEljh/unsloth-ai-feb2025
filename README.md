@@ -16,6 +16,9 @@ Overview
   - Interleaving the code indexes (the individual 4-bit values extracted from the byte) to re-obtain a single vector is slower than operating on these sequentially. Similar reshapes and joins/concats are also slower.
   - extracting all 8 bits from a byte via asm seems to be unstable
 
+Overall, the performance of A seems to be a bit unstable (and from checking auto-tune, its sometimes a little inconsistent with blocksize choice; best `TL_BLOCKSIZE` on T4 is ~128).
+Re-running `test_dequantize` can yield a variety of results, albeit slightly bounded.
+
 [Notebook for C](/Unsloth_Puzzles_C.ipynb)
 - Reused kernel from A, with small modifications to autotune params, and some constant fixing for torch compile (also a minor sidestep of `triton.cdiv`)
 - Compiled loss, mlp, attention, and layernorms.
