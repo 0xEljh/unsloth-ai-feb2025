@@ -8,13 +8,12 @@ Overview
 - The main optimizations over a "naive dequantization" are:
   - using `fma` to calculate block absmax (fuses multiplication and addition)
   - reading less absmax values (1 per block instead of 1 per element); we can use a matmul to "broadcast" back to the correct shape anyways
+    > this reduces two reads by a factor of `weight_blocksize`, one of which is non-contiguous
   - using tl.where and the raw code values instead of an index lookup (similar to bnb nf4 implementation)
-  - cache offset and absmax2 values
+  - cache `offset` and `absmax2` values
   - use custom asm to extract the 4-bit codes from each byte
   - ensure contiguouity of output
-- What doesn't work:
-  - Interleaving the code indexes (the individual 4-bit values extracted from the byte) to re-obtain a single vector is slower than operating on these sequentially. Similar reshapes and joins/concats are also slower.
-  - extracting all 8 bits from a byte via asm seems to be unstable
+  - interleave the dequantized weights for contiguous memory writes (instead of strided). This interleave is done after the matmul with absmax rather than before for performance stability on T4 (affected lower bound of bench sometimes)
 
 Overall, the performance of A seems to be a bit unstable (and from checking auto-tune, its sometimes a little inconsistent with blocksize choice; best `TL_BLOCKSIZE` on T4 is ~128).
 Re-running `test_dequantize` can yield a variety of results, albeit slightly bounded.
