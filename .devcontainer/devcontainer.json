@@ -14,13 +14,15 @@
 	// "forwardPorts": [],
 
 	// Use 'postCreateCommand' to run commands after the container is created.
-	"postCreateCommand": "pip install -r requirements.txt",
+	// "postCreateCommand": "pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126 && pip install --no-deps -r requirements_no_deps.txt && pip install -r requirements_w_deps.txt",
+	"postCreateCommand": "pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126 && pip install -r requirements.txt",
 	"customizations": {
 		"vscode": {
 			"extensions": [
 				"ms-toolsai.jupyter",
 				"ms-python.black-formatter",
-				"nvidia.nsight-vscode-edition"
+				"nvidia.nsight-vscode-edition",
+				"ms-toolsai.vscode-jupyter-powertoys"
 			]
 		}
 	},
