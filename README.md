@@ -4,19 +4,18 @@ Taking on the unsloth puzzle
 Overview
 --------
 
-[Colab Notebook for A](https://colab.research.google.com/drive/1MnNocyMRQrBL529hdnNJ5myZD5ka_xPl?usp=sharing)
+[Colab Notebook for A](https://colab.research.google.com/drive/1SSFSmimdWNmkwZxO1y59XP9V11jwPs49?usp=sharing)
 - The main optimizations over a "naive dequantization" are:
   - using `fma` to calculate block absmax (fuses multiplication and addition)
   - reading less absmax values (1 per block instead of 1 per element); we can use a matmul to "broadcast" back to the correct shape anyways
-    > this reduces two reads by a factor of `weight_blocksize`, one of which is non-contiguous
+    > this reduces two reads by a factor of `weight_blocksize`, of which one of these reads is non-contiguous
   - using tl.where and the raw code values instead of an index lookup (similar to bnb nf4 implementation)
   - cache `offset` and `absmax2` values
-  - use custom asm to extract the 4-bit codes from each byte
-  - ensure contiguouity of output
-  - interleave the dequantized weights for contiguous memory writes (instead of strided). This interleave is done after the matmul with absmax rather than before for performance stability on T4 (affected lower bound of bench sometimes)
+  - cache `code` values so it can be "gathered" from cache memory (we don't want a non-contiguous read from global memory)
+  - ensure contiguouity of output tensor
+  - interleave the final two sets dequantized weights so we can perform a single contiguous memory write (instead of two strided ones). This interleave is done after the matmul with absmax rather than before.
 
-Overall, the performance of A seems to be a bit unstable (and from checking auto-tune, its sometimes a little inconsistent with blocksize choice; best `TL_BLOCKSIZE` on T4 is ~128).
-Re-running `test_dequantize` can yield a variety of results, albeit slightly bounded.
+Overall, this leads to a colab timing of `~3.8s` for 1k iterations. Which is a ~1.25+x speedup over the original implementation.
 
 [Notebook for C](/Unsloth_Puzzles_C.ipynb)
 - Reused kernel from A, with small modifications to autotune params, and some constant fixing for torch compile (also a minor sidestep of `triton.cdiv`)
