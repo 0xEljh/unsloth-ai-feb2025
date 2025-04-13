@@ -18,15 +18,17 @@ Overview
 Overall, this leads to a colab timing of `~3.8s` for 1k iterations. Which is a ~1.25+x speedup over the original implementation.
 
 [Notebook for C](/Unsloth_Puzzles_C.ipynb)
-- Reused kernel from A, with small modifications to autotune params, and some constant fixing for torch compile (also a minor sidestep of `triton.cdiv`)
+- Reused kernel from A
 - Compiled loss, mlp, attention, and layernorms.
 - Patching out linear4bit solves most of the graph break issues.
-- The sdpa attention and llama attention are further simplified to prevent breaks/recompiles. Might revist to swap with flex attention.
 - The last source of recompiles is due to the cache. But swapping to the static cache seems to consume lots of memory. Not dealing with this only adds about ~8 recompiles which seems acceptable.
+- Added flex attention, enabling dynamic shapes for this requires quite a few patches to handle the symbolic shape parameters: size hints, swapping in sym math, etc.
 
 [Notebook for D](/Unsloth_Puzzles_D.ipynb)
 - Implemented the linear efficient backprop without explicitly defining gradient calculation (left to autograd; turns out that's the actual intention of the challenge and that definitely makes it easier)
+- Added a wrapper to support awareness of the reduction method (sum or mean), which need to be handled differently (esp. for unequal chunk sizes)
 - Using 4 chunks provides >50% vram reduction
-- This implementation still needs to be made aware of the reduction method, in a manual way (changing the variable within the function). Can definitely be improved here.
-- Tested with both CE and MSE losses.
-- Patching it into the Llama head is still a WIP.
+- Using a larger number of chunks can cause some drift due to more floating point ops + the nature of the values handled being very small
+- Tested with both CE and MSE losses, as well as the llama causal loss function
+- Tested with llama, which requires some adaptation of the sequence of operations because of the label shifting
+- Used it in GRPO training: Exposed the logit calculation and used `memory_efficient_linear` to calculate both the `loss` and `mean_kl` terms. This requires some "hacking" to put together an appropriate `label` (i.e. the parameters that need to be chunked along with the logits) and also appropriate handling of the reduction.
