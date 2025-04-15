@@ -17,6 +17,16 @@ Overview
 
 Overall, this leads to a colab timing of `~3.8s` for 1k iterations. Which is a ~1.25+x speedup over the original implementation.
 
+Notebook for B
+- Reused code from A and C.
+- To enable mixed precision policy with `Linear4bitCompilable`, we cast the weights within to match the dtype of the input tensor.
+- To enable cpu offloading, we add `cpu:gloo` as a backend
+- To allow torch compile to trace our sharded `Linear4bitCompilable`, we add a try-except (defaulting to `False`) to its attempt to match the subgraph as a weight-only quantized op (which would otherwise fail because the traced subgraph does not have `scales` with `meta`)
+- We help the trainer checkpoint/save the model by patching peft's `save_pretrained` to include localizing all `Dtensor` tensors before saving
+- `Linear4bit` (the base module and child module of lora), is sharded before its parent module, lora. This is in-line with the bottom up sharding approach of FSDP2, and allows us to disable sharding after forward for `Linear4bit` since its not necessary (it's frozen)
+- We also shard and compile the layernorms, since these are not part of any lora modules. This hence achieves sharding at every layer, and compilation at the top levels.
+- There's a graph break on the pre and post forward methods of sharded modules (the communication methods). This is due specific exclusion from compilation in the implementation. Unsure if patching this is in scope.
+
 [Notebook for C](/Unsloth_Puzzles_C.ipynb)
 - Reused kernel from A
 - Compiled loss, mlp, attention, and layernorms.
