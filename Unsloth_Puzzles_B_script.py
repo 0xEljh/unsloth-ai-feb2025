@@ -1,3 +1,125 @@
+# Helpful functions used through the entire notebook
+import torch
+import torch.nn as nn
+from transformers import set_seed
+import time
+import inspect
+import os
+
+major_version, minor_version = torch.cuda.get_device_capability()
+HAS_BFLOAT16 = major_version >= 8
+from inspect import currentframe as _C, getframeinfo
+
+_F = lambda c: getframeinfo(c).lineno  # Gets line number
+WARN = lambda x: print(f"\033[31m{x}\033[0m")  # Red colored warnings
+
+
+os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "1"
+
+# %%
+# HELPFUL functions to undo Unsloth patches:
+import sys
+
+
+def remove_patched_module(package_name):
+    modules_to_delete = [
+        name
+        for name in sys.modules
+        if name == package_name or name.startswith(package_name + ".")
+    ]
+    for name in modules_to_delete:
+        del sys.modules[name]
+
+
+remove_patched_module("trl")
+remove_patched_module("transformers")
+remove_patched_module("peft")
+remove_patched_module("bitsandbytes")
+
+# %%
+import os
+
+os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "1"
+# os.environ["CUDA_VISIBLE_DEVICES"] = "0,1"
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = (
+    "expandable_segments:True," "roundup_power2_divisions:[32:256,64:128,256:64,>:32]"
+)
+
+from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+from peft import get_peft_model, LoraConfig, TaskType
+
+max_seq_length = 2048
+torch.set_default_dtype(torch.float16)
+model_name = "unsloth/meta-Llama-3.1-8B-Instruct-bnb-4bit"
+dtype = torch.float16
+bnb_config = BitsAndBytesConfig(
+    load_in_4bit=True,
+    bnb_4bit_use_double_quant=True,
+    bnb_4bit_quant_type="nf4",
+    bnb_4bit_compute_dtype=dtype,
+)
+
+tokenizer = AutoTokenizer.from_pretrained(model_name)
+tokenizer.padding_side = "right"
+
+lora_config = LoraConfig(
+    r=64,
+    lora_alpha=128,
+    target_modules=[
+        "q_proj",
+        "k_proj",
+        "v_proj",
+        "o_proj",
+        "gate_proj",
+        "up_proj",
+        "down_proj",
+    ],
+    lora_dropout=0,
+    bias="none",
+    task_type=TaskType.CAUSAL_LM,
+)
+
+# Get dataset
+from datasets import load_dataset
+
+url = "https://huggingface.co/datasets/laion/OIG/resolve/main/unified_chip2.jsonl"
+dataset = load_dataset("json", data_files={"train": url}, split="train[:10%]")
+
+# %%
+torch_compile_options = {
+    "epilogue_fusion": True,
+    "max_autotune": True,
+    "shape_padding": True,
+    "trace.enabled": True,
+    "triton.cudagraphs": False,
+}
+
+import os
+
+os.environ["TORCHDYNAMO_VERBOSE"] = "1"
+os.environ["TORCHINDUCTOR_FORCE_DISABLE_CACHES"] = "1"
+os.environ["TORCHINDUCTOR_COMPILE_THREADS"] = "1"
+
+import logging
+
+torch._inductor.config.debug = True
+torch._logging.set_logs(
+    dynamo=logging.WARN,
+    inductor=logging.WARN,
+    graph_breaks=True,
+    # recompiles=True,
+    # recompiles_verbose=True,
+    # compiled_autograd_verbose=True,
+)
+torch._dynamo.config.verbose = False
+torch._dynamo.config.suppress_errors = False
+
+
+# %% [markdown]
+# ## Patches
+
+print("Patching modules")
+
 import contextlib
 import functools
 import shutil
@@ -25,11 +147,7 @@ from transformers.trainer_pt_utils import (
     get_model_param_count,
 )
 from torch.utils.data import (
-    DataLoader,
-    Dataset,
-    IterableDataset,
     RandomSampler,
-    SequentialSampler,
 )
 
 
@@ -38,13 +156,7 @@ if is_accelerate_available():
     from accelerate import __version__ as accelerate_version
     from accelerate.state import AcceleratorState
     from accelerate.utils import (
-        AutocastKwargs,
-        DistributedDataParallelKwargs,
         DistributedType,
-        load_fsdp_model,
-        load_fsdp_optimizer,
-        save_fsdp_model,
-        save_fsdp_optimizer,
     )
 
     DATA_SAMPLERS = [RandomSampler]
@@ -112,6 +224,7 @@ def patched_inner_training_loop(
     total_train_batch_size = (
         self._train_batch_size * args.gradient_accumulation_steps * args.world_size
     )
+    logger.info("total_train_batch_size", total_train_batch_size)
     (
         num_train_epochs,
         num_update_steps_per_epoch,
@@ -636,148 +749,7 @@ import transformers.trainer as trans_trainer
 
 trans_trainer.Trainer._inner_training_loop = patched_inner_training_loop
 
-print("patched inner training loop")
-
-
-import torch
-
-
-# Helpful functions used through the entire notebook
-import torch
-import torch.nn as nn
-from transformers import set_seed
-import time
-import inspect
-import os
-
-major_version, minor_version = torch.cuda.get_device_capability()
-HAS_BFLOAT16 = major_version >= 8
-from inspect import currentframe as _C, getframeinfo
-
-_F = lambda c: getframeinfo(c).lineno  # Gets line number
-WARN = lambda x: print(f"\033[31m{x}\033[0m")  # Red colored warnings
-
-
-os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "1"
-
-# %%
-# HELPFUL functions to undo Unsloth patches:
-import sys
-
-
-def remove_patched_module(package_name):
-    modules_to_delete = [
-        name
-        for name in sys.modules
-        if name == package_name or name.startswith(package_name + ".")
-    ]
-    for name in modules_to_delete:
-        del sys.modules[name]
-
-
-remove_patched_module("trl")
-remove_patched_module("transformers")
-remove_patched_module("peft")
-remove_patched_module("bitsandbytes")
-
-# %%
-import os
-
-os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "1"
-# os.environ["CUDA_VISIBLE_DEVICES"] = "0,1"
-os.environ["PYTORCH_CUDA_ALLOC_CONF"] = (
-    "expandable_segments:True," "roundup_power2_divisions:[32:256,64:128,256:64,>:32]"
-)
-
-from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
-from peft import get_peft_model, LoraConfig, TaskType
-
-max_seq_length = 2048
-torch.set_default_dtype(torch.float16)
-model_name = "unsloth/meta-Llama-3.1-8B-Instruct-bnb-4bit"
-dtype = torch.float16
-bnb_config = BitsAndBytesConfig(
-    load_in_4bit=True,
-    bnb_4bit_use_double_quant=True,
-    bnb_4bit_quant_type="nf4",
-    bnb_4bit_compute_dtype=dtype,
-)
-
-tokenizer = AutoTokenizer.from_pretrained(model_name)
-tokenizer.padding_side = "right"
-
-lora_config = LoraConfig(
-    r=64,
-    lora_alpha=128,
-    target_modules=[
-        "q_proj",
-        "k_proj",
-        "v_proj",
-        "o_proj",
-        "gate_proj",
-        "up_proj",
-        "down_proj",
-    ],
-    lora_dropout=0,
-    bias="none",
-    task_type=TaskType.CAUSAL_LM,
-)
-
-# Get dataset
-from datasets import load_dataset
-
-url = "https://huggingface.co/datasets/laion/OIG/resolve/main/unified_chip2.jsonl"
-dataset = load_dataset("json", data_files={"train": url}, split="train[:10%]")
-
-# %%
-# For convenience
-original_losses, original_steps = [
-    1.4065,
-    2.1792,
-    2.0003,
-    3.2503,
-    1.9516,
-    2.7509,
-    1.9253,
-    1.4287,
-    1.884,
-    2.0887,
-], list(range(1, 10 + 1))
-
-# %%
-torch_compile_options = {
-    "epilogue_fusion": True,
-    "max_autotune": True,
-    "shape_padding": True,
-    "trace.enabled": True,
-    "triton.cudagraphs": False,
-}
-
-import os
-
-os.environ["TORCHDYNAMO_VERBOSE"] = "1"
-os.environ["TORCHINDUCTOR_FORCE_DISABLE_CACHES"] = "1"
-os.environ["TORCHINDUCTOR_COMPILE_THREADS"] = "1"
-
-import logging
-
-torch._inductor.config.debug = True
-torch._logging.set_logs(
-    dynamo=logging.WARN,
-    inductor=logging.WARN,
-    graph_breaks=True,
-    # recompiles=True,
-    # recompiles_verbose=True,
-    # compiled_autograd_verbose=True,
-)
-torch._dynamo.config.verbose = False
-torch._dynamo.config.suppress_errors = False
-
-
-# %% [markdown]
-# ## Patches
-
-print("Patching modules")
+print("patched trainer")
 
 # %%
 from typing import Optional, Tuple
@@ -1275,30 +1247,6 @@ def _your_dequantize_nf4_kernel(
 
 NF4_WEIGHT_BLOCKSIZE = 64
 NF4_ABSMAX_BLOCKSIZE = 256
-# taken from bitsandbytes get_4bit_type to ensure we use the same values
-# https://github.com/bitsandbytes-foundation/bitsandbytes/blob/86b6c37a8ad448230cedb60753f63150b603a112/bitsandbytes/functional.py#L1075
-NF4_CODE_VALUES = torch.tensor(
-    [
-        -1.0,
-        -0.6961928009986877,
-        -0.5250730514526367,
-        -0.39491748809814453,
-        -0.28444138169288635,
-        -0.18477343022823334,
-        -0.09105003625154495,
-        0.0,
-        0.07958029955625534,
-        0.16093020141124725,
-        0.24611230194568634,
-        0.33791524171829224,
-        0.44070982933044434,
-        0.5626170039176941,
-        0.7229568362236023,
-        1.0,
-    ],
-    dtype=torch.float32,
-    device="cuda",
-)
 
 
 def triton_dequantize_nf4(weight, quant_state):
@@ -1314,6 +1262,31 @@ def triton_dequantize_nf4(weight, quant_state):
     # cdiv: (x + y - 1) // y
     weight_grid = lambda meta: (
         (out.numel() // 2 + meta["BLOCK_SIZE"] - 1) // meta["BLOCK_SIZE"],
+    )
+
+    # taken from bitsandbytes get_4bit_type to ensure we use the same values
+    # https://github.com/bitsandbytes-foundation/bitsandbytes/blob/86b6c37a8ad448230cedb60753f63150b603a112/bitsandbytes/functional.py#L1075
+    NF4_CODE_VALUES = torch.tensor(
+        [
+            -1.0,
+            -0.6961928009986877,
+            -0.5250730514526367,
+            -0.39491748809814453,
+            -0.28444138169288635,
+            -0.18477343022823334,
+            -0.09105003625154495,
+            0.0,
+            0.07958029955625534,
+            0.16093020141124725,
+            0.24611230194568634,
+            0.33791524171829224,
+            0.44070982933044434,
+            0.5626170039176941,
+            0.7229568362236023,
+            1.0,
+        ],
+        dtype=torch.float32,
+        device="cuda",
     )
 
     _your_dequantize_nf4_kernel[weight_grid](
@@ -1377,36 +1350,95 @@ class Linear4bitCompilable(nn.Module):
 
 
 # %% [markdown]
-# ## Model Sharding and Compilation
+# ## Building and training the model
 
-# %%
-import socket
-
-
-def find_free_port():
-    """Finds an available port on localhost."""
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("", 0))  # Bind to "" (all interfaces) and port 0 (ephemeral)
-        port = s.getsockname()[1]  # Get the assigned port
-    return str(port)
-
-
-find_free_port()
-
-# %%
 from torch.distributed import DeviceMesh, init_process_group, get_rank
 from datetime import timedelta
-
-# Set required environment variables
-# os.environ["RANK"] = "0"  # Set the rank of the current process
-# os.environ["WORLD_SIZE"] = str(
-#     torch.cuda.device_count()
-# )  # Set the total number of processes
-# os.environ["MASTER_ADDR"] = "localhost"  # Set the master address
-# os.environ["MASTER_PORT"] = "29500"  # based on accelerate implementation
+import argparse
+import json
 
 
-def main():
+def parse_sft_args(sft_args_list):
+    """Parses a list of 'key=value' strings into a dictionary."""
+    overrides = {}
+    if not sft_args_list:
+        return overrides
+    for arg in sft_args_list:
+        try:
+            key, value = arg.split("=", 1)
+            overrides[key.strip()] = value.strip()
+        except ValueError:
+            print(
+                f"Warning: Could not parse SFT arg '{arg}'. Expected format 'key=value'. Skipping."
+            )
+    return overrides
+
+
+def convert_arg_types(overrides, base_config_obj):
+    """
+    Converts string values in overrides dict to match types in base_config_obj attributes.
+    Uses json.loads for dict and list types for safety.
+    """
+    converted_overrides = {}
+    for key, value_str in overrides.items():
+        if not hasattr(base_config_obj, key):
+            # Allow passing arbitrary kwargs not present in default SFTConfig if needed
+            print(
+                f"Warning: SFT arg '{key}' not found in base SFTConfig attributes. Passing as int/string."
+            )
+            converted_overrides[key] = (
+                value_str if not value_str.isdigit() else int(value_str)
+            )  # Or skip if strict matching is desired
+            # print(
+            #     f"Warning: SFT arg '{key}' not found in base SFTConfig attributes. Skipping."
+            # )
+            continue
+
+        target_attr = getattr(base_config_obj, key)
+        target_type = type(target_attr)
+
+        try:
+            if target_type == bool:
+                if value_str.lower() in ("true", "1", "yes", "y"):
+                    converted_value = True
+                elif value_str.lower() in ("false", "0", "no", "n"):
+                    converted_value = False
+                else:
+                    raise ValueError(f"Invalid boolean value: {value_str}")
+            elif target_type == dict:
+                try:
+                    converted_value = json.loads(value_str)
+                    if not isinstance(converted_value, dict):
+                        raise ValueError("Parsed JSON is not a dictionary.")
+                except json.JSONDecodeError:
+                    raise ValueError(f"Invalid JSON for dict value: {value_str}")
+            elif target_type == list:
+                try:
+                    converted_value = json.loads(value_str)
+                    if not isinstance(converted_value, list):
+                        raise ValueError("Parsed JSON is not a list.")
+                except json.JSONDecodeError:
+                    raise ValueError(f"Invalid JSON for list value: {value_str}")
+            elif target_type == type(None) and value_str.lower() == "none":
+                converted_value = None
+            elif value_str.lower() == "none" and key in [
+                "report_to"
+            ]:  # Handle specific 'none' strings
+                converted_value = "none"
+            else:
+                # General type conversion (int, float, str)
+                converted_value = target_type(value_str)
+
+            converted_overrides[key] = converted_value
+        except (ValueError, TypeError) as e:
+            print(
+                f"Warning: Could not convert SFT arg '{key}={value_str}' to type {target_type}. Skipping. Error: {e}"
+            )
+
+    return converted_overrides
+
+
+def main(args):
     # These are set by torchrun
     local_rank = int(os.environ["LOCAL_RANK"])
     global_rank = int(os.environ["RANK"])
@@ -1467,7 +1499,12 @@ def main():
     model.gradient_checkpointing_enable()
     model.enable_input_require_grads()
 
+    # if rank == 1:
+    #     print("base qlora model built")
+
     # %%
+    # patch modules for torch compile
+
     modules_to_replace = []
     for name, module in model.named_modules():
         module_type = str(type(module))
@@ -1478,14 +1515,6 @@ def main():
             # print(name, type(module))
             modules_to_replace.append(name)
 
-    modules_to_replace[-2:]
-
-    if rank == 1:
-        print("base qlora model built")
-
-    # %%
-    # patch modules for torch compile
-    # fully shard is an in-place op. but we'll do it later at all once
     for name in modules_to_replace:
         module = model.get_submodule(name)
         # create a new patched module from the old one
@@ -1521,8 +1550,6 @@ def main():
     # >  Calling fully_shard() on module constructs one group that includes the parameters in module.parameters() except those already assigned to a group from an earlier call on a submodule. This means that fully_shard() should be called bottom-up on your model. Each group’s parameters are all-gathered in one collective, and its gradients are reduce-scattered in one collective. Partitioning the model into multiple groups (“layer by layer”) allows for peak memory savings and communication/computation overlap. Users generally should not call fully_shard() only on the topmost root module.
     #
     # In following this, we next fully shard the Lora module, which needs to be handled a bit different from the Linear4bit "base module" which we just patched out. This module actually has gradients!
-
-    # %%
     for name, module in model.named_modules():
         module_type = str(type(module))
 
@@ -1538,13 +1565,7 @@ def main():
     if rank == 1:
         print("Sharded lora")
 
-    # %% [markdown]
-    # Compile the top level modules, as per part C (prior to flex attention patch)
-
-    # %% [markdown]
     # We compile the remaining top level modules. Layernorm is also sharded before compiling because it is outside of the "lora tree" that we have already sharded and compiled. This extends our coverage of sharding and compilation to all levels of the model.
-
-    # %%
     module_names = set()
     for index, child in model.base_model.model.model.layers.named_children():
         for name, module in child.named_children():
@@ -1579,40 +1600,45 @@ def main():
     from trl import SFTTrainer, SFTConfig
     import types
 
+    # we want total train batch size to be effectively the same for both 1 and 2 gpus
+    # total_train_batch_size = (
+    #     self._train_batch_size * args.gradient_accumulation_steps * args.world_size
+    # )
+
+    BASE_SFT_CONFIG_DEFAULTS = {
+        "per_device_train_batch_size": 2,
+        "gradient_accumulation_steps": 4,
+        "warmup_steps": 1,
+        "max_steps": 10,
+        "logging_steps": 1,
+        "output_dir": "outputs",
+        "seed": 3407,
+        "max_seq_length": max_seq_length,
+        "fp16": model.get_input_embeddings().weight.dtype == torch.float16,
+        "bf16": model.get_input_embeddings().weight.dtype == torch.bfloat16,
+        "report_to": "none",
+        "dataset_num_proc": 4,
+    }
+
+    sft_configs = BASE_SFT_CONFIG_DEFAULTS.copy()
+    sft_configs.update(
+        convert_arg_types(
+            parse_sft_args(args.sftargs), SFTConfig(**BASE_SFT_CONFIG_DEFAULTS)
+        )
+    )
+
     trainer = SFTTrainer(
         model=model,
         train_dataset=dataset,
         processing_class=tokenizer,
         args=SFTConfig(
-            local_rank=rank,
-            per_device_train_batch_size=1,
-            gradient_accumulation_steps=2,
-            warmup_steps=1,
-            max_steps=10,
-            logging_steps=1,
-            output_dir="outputs",
-            seed=3407,
-            max_seq_length=max_seq_length,
-            fp16=model.get_input_embeddings().weight.dtype == torch.float16,
-            bf16=model.get_input_embeddings().weight.dtype == torch.bfloat16,
-            report_to="none",  # For W&B
-            dataset_num_proc=4,
-            # fsdp="hybrid_shard", # prevents trainer defaulting to DDP
-            # fsdp_config={"sync_module_states": False, "use_orig_params": True,},
+            **sft_configs,
         ),
     )
 
-    if rank == 1:
-        print(trainer._inner_training_loop)
-        print(trainer.args)
-
-    # if trainer._inner_training_loop != patched_inner_training_loop:
     trainer._inner_training_loop = types.MethodType(
         patched_inner_training_loop, trainer
     )
-
-    # trainer.is_model_parallel = True
-    # trainer.args._n_gpu = 1 # avoid DataParallel, FSDP2 will manage GPUs
 
     trainer.train()
 
@@ -1625,10 +1651,19 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
-    # try:
-    #     main()
-    # except Exception as e:
-    #     print(e)
-    #     if torch.distributed.is_initialized():
-    #         torch.distributed.destroy_process_group()
+    parser = argparse.ArgumentParser(
+        description="FSDP2 QLoRA Training Script with Flexible SFT Args"
+    )
+    # Generic argument for SFTConfig overrides
+    parser.add_argument(
+        "--sftargs",
+        nargs="*",  # Accept 0 or more 'key=value' pairs
+        help='Override SFTConfig parameters with key=value pairs (e.g., "max_steps=50" "logging_steps=5" "fsdp_config={\'limit_all_gathers\':False}"). Use quotes for args with spaces or special chars.',
+        default=[],
+    )
+    try:
+        main(parser.parse_args())
+    except Exception as e:
+        if torch.distributed.is_initialized():
+            torch.distributed.destroy_process_group()
+        raise e

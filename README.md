@@ -18,7 +18,7 @@ Overview
 Overall, this leads to a colab timing of `~3.8s` for 1k iterations. Which is a ~1.25+x speedup over the original implementation.
 
 [Notebook for B](/Unsloth_Puzzles_B.ipynb)
-- The [corresponding kaggle notebook]((https://www.kaggle.com/code/mxksowie/fsdp2-with-qlora)) and [colab notebook](https://colab.research.google.com/drive/19Xag1tT7KM8vZ5FgiHuKLu9dEhFdMtjI#scrollTo=upoSvQmMEJMp) is just an execution of the script version of this notebook. Explainers are primarily in the main notebook on this github.
+- The [corresponding kaggle notebook](https://www.kaggle.com/code/mxksowie/fsdp2-with-qlora) and [colab notebook](https://colab.research.google.com/drive/19Xag1tT7KM8vZ5FgiHuKLu9dEhFdMtjI#scrollTo=upoSvQmMEJMp) is just an execution of the script version of this notebook. Explainers are primarily in the main notebook on this github.
 - Reused code from A and C.
 - To enable mixed precision policy with `Linear4bitCompilable`, we cast the weights within to match the dtype of the input tensor.
 - To enable cpu offloading, we add `cpu:gloo` as a backend
