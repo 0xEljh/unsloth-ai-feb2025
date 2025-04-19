@@ -27,6 +27,7 @@ Overall, this leads to a colab timing of `~3.8s` for 1k iterations. Which is a ~
 - `Linear4bit` (the base module and child module of lora), is sharded before its parent module, lora. This is in-line with the bottom up sharding approach of FSDP2, and allows us to disable sharding after forward for `Linear4bit` since its not necessary (it's frozen)
 - We also shard and compile the layernorms, since these are not part of any lora modules. This hence achieves sharding at every layer, and compilation at the top levels.
 - There's a graph break on the pre and post forward methods of sharded modules (the communication methods). This is due specific exclusion from compilation in the implementation. Unsure if patching this is in scope.
+- The loss curve between 1 and 2 gpus are not the same, but the loss curves pre and post patching are the same. This is even the case without adding any FSDP or compilations. At least they don't look obviously errenous. Haven't traced through the training config to see if there is something I'm missing to align them (e.g. how train batch size is calculated or if there's some kinda default DDP behavior on multi-gpus that I've missed).
 
 [Notebook for C](/Unsloth_Puzzles_C.ipynb)
 - Reused kernel from A
