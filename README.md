@@ -1,6 +1,6 @@
-# Unsloth AI Challenge 2025 Solutions
+# Unsloth Challenge 2025 Solutions
 
-Solutions to the [Unsloth Puzzles Challenge](https://www.kaggle.com/competitions/unsloth-2025-puzzles), a technical competition focused on optimizing LLM fine-tuning through custom CUDA/Triton kernels, distributed training, and memory-efficient techniques.
+My solutions to the [Unsloth Challenge](https://x.com/danielhanchen/status/1891194528931209644), a set of open puzzles focused on optimizing LLM fine-tuning through Triton kernels, distributed training, compilation, and memory-efficient techniques.
 
 ## Table of Contents
 
@@ -17,7 +17,7 @@ Solutions to the [Unsloth Puzzles Challenge](https://www.kaggle.com/competitions
 
 ## Overview
 
-The Unsloth 2025 Puzzles challenge consists of five technical problems (A-E) targeting key bottlenecks in LLM fine-tuning. Each puzzle addresses a different aspect of the optimization pipeline:
+The Unsloth challenge consists of five problems (A-E), with A, B, and C being slightly related due to their use in/of QLoRA/NF4 quantization. D referred to a set of opensource bounties in Unsloth's repo.
 
 | Puzzle | Focus Area | Difficulty | Max Points |
 |--------|-----------|------------|------------|
@@ -42,14 +42,14 @@ Convert NF4 (4-bit NormalFloat) quantized tensors to fp16/bf16 in a **single Tri
 
 ### Background
 
-NF4 quantization (used by bitsandbytes/QLoRA) stores weights in 4-bit format with block-wise scaling factors. Dequantization requires:
+NF4 quantization (used by bitsandbytes/QLoRA) stores weights in a 4-bit format with block-wise scaling factors. Dequantization requires:
 1. Looking up the 4-bit code values from a 16-element codebook
 2. Multiplying by the block's absmax (scaling factor)
 3. The absmax itself is quantized (double quantization), requiring a second lookup
 
 ### Solution Approach
 
-The implementation in [`Unsloth_Puzzles_A.ipynb`](Unsloth_Puzzles_A.ipynb) uses several key optimizations:
+My implementation in [`Unsloth_Puzzles_A_colab_copy.ipynb`](Unsloth_Puzzles_A_colab_copy.ipynb) uses the following optimizations:
 
 #### 1. Fused Multiply-Add for Absmax Calculation
 ```python
@@ -59,6 +59,8 @@ absmax = tl.fma(absmax1_val, absmax2_val, offset)  # fuses multiplication and ad
 #### 2. Reduced Memory Reads
 Instead of reading one absmax per element, we read one per block and use the block structure to broadcast:
 ```python
+# naive approach -> returns a vector like (0, ..., 0, 1, ...); many repeats
+weight_block_index = index // (weight_blocksize // 2)
 # Read absmax once per weight block, not per element
 weight_block_index = start // (weight_blocksize // 2) + tl.arange(0, BLOCK_SIZE // (weight_blocksize // 2))
 ```
@@ -68,7 +70,7 @@ This reduces two reads by a factor of `weight_blocksize` (64), with one being no
 The NF4 codebook (16 values) is pulled into cache contiguously, then gathered:
 ```python
 code_index_range = tl.arange(0, 16)
-_ = tl.load(code_ptr + code_index_range, eviction_policy="evict_last")  # pull into cache
+_ = tl.load(code_ptr + code_index_range, eviction_policy="evict_last")  # pull codebook into cache
 weight1 = gather_nf4_code(code_index1, code_ptr)  # gather from cache
 ```
 
@@ -87,8 +89,9 @@ tl.store(out_ptr + weight_index, tl.ravel(weight), mask=weight_index < total_ele
 
 | Metric | Unsloth Reference | This Implementation | Speedup |
 |--------|-------------------|---------------------|---------|
-| Time (1k iters) | ~2.37s | ~2.03s | **~1.17x** |
-| Colab timing | ~4.5s | ~3.8s | **~1.25x** |
+| Colab timing | ~4.7s | ~3.8s | **~1.25x** |
+
+<img width="645" height="236" alt="image" src="https://github.com/user-attachments/assets/7e5e2a5a-cb5e-4cbc-918d-bc6fdcf5938b" />
 
 The kernel also works with `torch.compile` (with some expected recompilations due to dynamic shapes).
 
@@ -135,7 +138,7 @@ W = triton_dequantize_nf4(self.weight, self.quant_state).to(x.dtype)
 ```
 
 #### 3. CPU Offloading Backend
-Add gloo backend for CPU operations alongside NCCL for GPU:
+Add gloo backend for CPU operations:
 ```python
 init_process_group("cuda:nccl,cpu:gloo", timeout=timedelta(seconds=1_800))
 ```
@@ -152,7 +155,7 @@ def patch_is_valid_woq_optimization_pattern():
 ```
 
 #### 5. DTensor-Aware Checkpointing
-Patch peft's `save_pretrained` to localize DTensors before saving:
+Patch peft's `save_pretrained` to localize DTensors before saving/checkpointing:
 ```python
 for name, tensor in output_state_dict.items():
     if isinstance(tensor, DTensor):
@@ -165,6 +168,10 @@ Following FSDP2 best practices, shard from the bottom up:
 1. First shard `Linear4bitCompilable` (frozen base layers) with `reshard_after_forward=False`
 2. Then shard LoRA modules with `reshard_after_forward=True`
 3. Finally shard layernorms (outside LoRA tree)
+
+We compile all modules after sharding.
+
+We get to use `reshard_after_forward=False` on all base layers because they don't get updated during training (they are frozen!)
 
 ### Results
 
@@ -200,7 +207,7 @@ QLoRA has several problematic areas:
 
 ### Solution Approach
 
-The implementation in [`Unsloth_Puzzles_C.ipynb`](Unsloth_Puzzles_C.ipynb) systematically addresses each issue:
+The implementation in [`Unsloth_Puzzles_C.ipynb`](Unsloth_Puzzles_C.ipynb) systematically addresses each issue by patching them out:
 
 #### 1. Replace Linear4bit with Compilable Version
 Same wrapper as Puzzle B, using Triton kernel instead of bitsandbytes CUDA:
@@ -265,6 +272,8 @@ for child in model.layers:
 |--------|----------|----------|
 | Step 1 Loss | 1.5196 | 1.5199 |
 | Step 10 Loss | 2.6758 | 2.7632 |
+
+<img width="567" height="453" alt="image" src="https://github.com/user-attachments/assets/7a6a61f8-d66f-465c-ad0c-e54ff78f1b05" />
 
 Losses remain closely aligned with minor divergence due to flex attention tuning. The remaining recompiles (~8) are from dynamic cache shapes, which is acceptable given the memory cost of static caching.
 
